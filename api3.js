@@ -10,7 +10,7 @@ dotenv.config();
 
 app.disable('x-powered-by');
 
-app.use(cors()) 
+// app.use(cors()) 
 
 app.use(bodyParser.json())
 
@@ -52,13 +52,15 @@ app.put('/v1/ticket/contact/:id', cors(), db.putContactOt)
 
 app.get('/v1/ticket/contact/:id', cors(), db.getContactOt)
 
+app.get('/v1/equipe/:id/utilisateurs', cors(), db.getUtilisateursEquipe)
+
 app.patch('/v1/utilisateur/:id',cors(), db.patchUtilisateur)
 
 app.get('/v1/utilisateur/droitsSupervision',cors(), db.getDroitsSupervision)
 
 app.put('/v1/ticket/:id/issue', cors(), db.addRemineIssue)
 
-app.get('/issue/:id',cors(),db.readRemineIssue)
+app.get('/v1/issue/:id',cors(),db.readRemineIssue)
 
 app.get('/v1/ticket/:id/issues', cors(), db.getRemineIssueOt)
 
@@ -106,7 +108,11 @@ app.get('/tickets/listeContactsOpOt/:id', cors(), db.listeContactsOpOt)
 
 app.get('/tickets/etat/cc', cors(), db.listeOtCC)
 
+app.get('/tickets/etat/ccBeta', cors(), db.listeOtCCBeta)
+
 app.get('/tickets/etat/support', cors(), db.listeOtSupport)
+
+app.get('/tickets/etat/support2', cors(), db.listeOtSupport2)
 
 app.get('/v1/contact/:id',cors(), db.getContact)
 
@@ -138,6 +144,8 @@ app.get('/v1/utilisateur/dbin/dossier/:id/noeuds',db.listeNoeudsDossier)
 
 app.get('/v1/noeud/:dossier/:id',db.litNoeud)
 
+app.get('/v1/indicateurs/:dossier/:id',db.litIndicateurs)
+
 app.get('/v1/noeud/:dossier/:id/intervenants',db.getEquipementsIntervenantsNoeud)
 
 app.get('/:dossier/installation/:id',db.litInstallation)
@@ -151,6 +159,14 @@ app.get('/:dossier/client/:id',db.litClient)
 app.get('/:dossier/etats',db.litEtatsDossier)
 
 app.post('/v1/noeud/:dossier/:id/ot',db.creerOt)
+
+app.post('/v1/noeud/:dossier/:id/historique',db.LireHistoriqueRhino)
+
+app.get('/v1/noeud/:dossier/:id/equipements',db.ListeEquipementsNoeud)
+
+app.get('/v1/noeud/:dossier/:id/canaux',db.ListeCanauxNoeud)
+
+app.patch('/rhino/equipement/:id',db.patchEquipementRhino)
 
 app.get('/v1/planifications/:header', db.listePlanificationNoeud) 
 
@@ -168,8 +184,14 @@ app.post('/v1/mobile/rapport/:id',db.putRapportMobile)
 
 app.post('/v1/log',db.postlog)
 
+app.get('/v1/stat/support/liste_tickets_2021050201',db.getListeTicketsSupport)
+
+app.get('/v1/stat/support/liste_traitements_2021050201',db.getListeTraitementsSupport)
+
 app.delete('/v1/logtek/planification',db.supprimePlanificationLogtek)
 
+app.put('/v1/cti/call',db.putCtiCall) 
+ 
 app.listen(port, () => {
   console.log(`App running on port ${port}.`)
 })

@@ -7,13 +7,24 @@ let moment = require('moment');
 
 console.log("Connexion à " + process.env.DB_USER + "@" + process.env.DB_NAME + "/" + process.env.DB_HOST + ":" + process.env.DB_PORT)
 
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
+
+console.log(process.env)
+ 
 const pool = new Pool({
-  user: 'seb',
-  host: '10.224.3.17',
-  database: 'extranet',
-  password: 'toto',
-  port: '5432',
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASS,
+  port: process.env.DB_PORT,
+  application_name: process.env.DB_APP_NAME
 }) 
+
+pool.on('remove', (err, client) => {
+  console.log("Connexion à la base perdue " + err)
+  // pool.connect()
+});
+
 
 pool.connect((err, client, release) => {
   if (err) {
@@ -82,7 +93,7 @@ const listeFichiersOT = (request, response) => {
 }
 
 const getInstallationSousTraitant = (request, response) => {
-	console.log("Chargement de la liste des fichiers de l'OT " + request.params.id)
+	console.log("Chargement des propriétés de sous-traitance de l'OT " + request.params.id)
   pool.query('select v1.get_installation_soustraitante($1) as flux', [request.params.id], (error, results) => {
     if (error) {
       console.log(error)
@@ -97,89 +108,172 @@ const getInstallationSousTraitant = (request, response) => {
 
 const getRemineIssueOt = (request, response) => {
   console.log("Chargement de la liste des issues de l'OT " + request.params.id)
-  pool.query('select id from tickets.tickets_ot where ot=$1', [request.params.id], (error, results) => {
+  pool.query('select \
+  tickets_ext.id\
+  ,id_local as ot\
+  ,id_distant\
+  ,status\
+  ,helpdesk_id\
+  ,helpdesks.libelle as helpdesk\
+  from tickets.tickets_ext\
+  left join v1.helpdesks on helpdesks.id=tickets_ext.helpdesk_id\
+  where id_local=$1', [request.params.id], (error, results) => {
     if (error) {
       console.log(error)
       response.status(500).json(null)
     }
-
-    console.log(results.rows)
-
     response.status(200).json(results.rows)
 
   }) 
 }
 
 const readRemineIssue = (request, response) => {
-  console.log("Lecture du ticket " + request.params.id)
-  
-  var Redmine = require('node-redmine');
+  try {
+    pool.query('select \
+    tickets_ext.id \
+    ,id_local as ot \
+    ,id_distant \
+    ,status \
+    ,helpdesk_id \
+    ,helpdesks.libelle as helpdesk \
+    ,helpdesks.url \
+    ,helpdesks.token \
+    from tickets.tickets_ext \
+    left join v1.helpdesks on helpdesks.id=tickets_ext.helpdesk_id \
+    where tickets_ext.id=$1 \
+    and helpdesk_id>0', [request.params.id], (error, results) => {
+      if (error) {
+        console.log(error)
+        response.status(500).json(null)
+      }
+      try{
+        axios({
+          method: 'GET',
+          url: results.rows[0].url + '/issues/' + results.rows[0].id_distant + '.json?include=attachments,journals',
+          headers: {
+            "X-Redmine-API-Key": results.rows[0].token,        
+            "Content-Type": "application/json"        
+          }
+        }).then(function (ret) {    
+          try {
+            pool.query('update tickets.tickets_ext set update_date=now(), flux=$2 where id=$1', [request.params.id,JSON.stringify(ret.data)], (error, results) => {
+              if (error) {
+                console.log("Erreur lors de la mise à jour de l'OT distant " + request.params.id)
+                response.status(500).json(null)
+              }
+              response.status(200).json(ret.data)
+            }) 
+          } catch(e){
+            console.log("Erreur lors de la mise à jour de l'OT distant " + request.params.id)
+            response.status(500).json(null)
+          }
 
-
-  var hostname = 'http://10.224.3.22/redmine/';
-  var config = {
-    apiKey: 'd9feb1785fed0f44f7db7920a5a47319f3181d2b'
-  };
-
-  var redmine = new Redmine(hostname, config);
-  var params = {include: 'attachments,journals,watchers'};
-
-  redmine.get_issue_by_id(parseInt(request.params.id), params,function(err, data) {
-    if (err){
-      console.log(err);
-      response.status(500).json(null)
-    }
-    else {
-      response.status(200).json(data)
-    }
-  });  
+          if (ret.data.issue.status.id==5){
+            pool.query('update tickets.tickets_ext set status=false where id=$1 and status is true', [request.params.id], (error, results) => {
+              if (error) {
+                console.log("Erreur lors de la mise à jour de l'OT distant " + request.params.id)
+              }
+            }) 
+          }
+        }).catch(function (err) {
+          if (err.response.status==404){
+            try {
+              pool.query('delete from tickets.tickets_ext where id=$1', [request.params.id], (error, results) => {
+                if (error) {
+                  console.log("Erreur lors de la mise à jour de l'OT distant " + request.params.id)
+                  response.status(500).json(null)
+                }
+              }) 
+            } catch(e){
+              console.log("Erreur lors de la mise à jour de l'OT distant " + request.params.id)
+            }
+          }
+          console.log("Code HTTP : " + err.status)
+          console.log('ERROR: ', err.response.status)
+          response.status(err.response.status).json(null)
+        })
+      } catch(e){
+        console.log(e)
+        response.status(500).json(null)
+      }
+    }) 
+  } catch(e){
+    response.status(500).json(null)
+  }
 }
 
 const addRemineIssue = (request, response) => {
-  console.log("Ajout d'un ticket Redmine")
-  console.log(request.body)
-
-  var Redmine = require('node-redmine');
-
-
-  var hostname = 'http://10.224.3.22/redmine/';
-  var config = {
-    apiKey: 'd9feb1785fed0f44f7db7920a5a47319f3181d2b'
-  };
-
-  var redmine = new Redmine(hostname, config);
-  var issue = {
-    "issue": {
-      "project_id": 7,
-      "subject": request.body.sujet,
-      "notes": request.body.note,
-      "priority_id": request.body.priorite
-    }
-  };
-  
-  redmine.create_issue(issue, function(err, data) {
-    if (err){
-      console.log(err);
-      response.status(500).json(null)
-    }
-    else {
-      console.log(data);
-      console.log("Ticket créé : " + data.issue.id)
- 
-      try {
-        pool.query('insert into tickets.tickets_ot(id,ot) values ($1,$2)', [data.issue.id,request.params.id], (error, results) => {
-          if (error) {
-            console.log(error)
-            response.status(500).json(null)
-          }
-          response.status(200).json(data)
-        }) 
-
-      } catch(e){
-        response.status(500)
+  try {
+    pool.query('select helpdesks.* from tickets.ot left join intranet.reseau r1 on r1.rese_id_reseau=ot.id_noeud left join intranet.reseau r2 on r2.rese_type=1004 and array_append(r1.rese_arborescence,r1.rese_id_reseau)@>array[r2.rese_pere] left join v1.helpdesks on helpdesks.id=r2.rese_id_objet where ot.id=$1', [request.body.ot], (error, results) => {
+      if (error) {
+        console.log(error)
+        response.status(500).json(null)
       }
-    }
-  });  
+
+      if (results.rowCount>0){
+        const helpdesk=results.rows[0]
+        console.log(helpdesk)
+        console.log("Nb de help desk associés à l'OT : " + results.rowCount)
+        try {
+          console.log("Recherche des tickets ext")
+          const helpdesk_id=results.rows[0].id
+
+          pool.query('select id_distant from tickets.tickets_ext where id_local=$1 and status and helpdesk_id=$2', [request.body.ot,helpdesk_id], (error, results) => {
+            if (error) {
+              console.log("Erreur lors de la recherche des tickets externes")
+              console.log(error)
+              response.status(500).json(null) 
+            }
+            console.log("Nb de tickets trouvés : " + results.rowCount)
+            if (results.rowCount>0){
+              var erreur={}
+              erreur.status=false
+              erreur.id_objet=results.rows[0].id_distant
+              erreur.message="Le ticket distant existe deja sous la référence "  + results.rows[0].id_distant
+              response.status(401).json(erreur)
+            } else {
+              try {
+                axios({
+                  method: 'POST',
+                  url: helpdesk.url + '/issues.json',
+                  data: request.body.data,
+                  headers: {
+                    "X-Redmine-API-Key": helpdesk.token,        
+                    "Content-Type": "application/json"        
+                  }
+                }).then(function (ret) {    
+                  try {
+                    pool.query('insert into tickets.tickets_ext(id_local,id_distant,helpdesk_id) values ($1,$2,$3)', [request.body.ot,ret.data.issue.id,helpdesk_id], (error, results) => {
+                      if (error) {
+                        console.log(error)
+                        response.status(500).json(null)
+                      }
+                      response.status(200).json(ret.data.issue)                         
+                    }) 
+                  } catch(e){
+                    response.status(500).json(null)
+                  }
+                });;
+              } catch(e){
+                console.log("Erreur lors de la recherche des tickets externes")
+                console.log(e)
+                response.status(500).json()
+              }
+            }
+          }) 
+        } catch(e){
+          console.log("Erreur lors de la recherche de tickets externe en base")
+          console.log(e)
+          response.status(500).json(null)
+        }
+      } else {
+        console.log("Pas de help deks associées")
+        response.status(404).json(null)
+      }
+    }) 
+  } catch(e){
+    response.status(500).json(null)
+  }
 }
 
 const sendMailJet = (request, response) => {
@@ -267,7 +361,6 @@ const getActionOtReference = (request, response) => {
     }
     if (results===undefined) response.status(404).json()
     if (results !== undefined){
-      console.log(results.rows)
       response.status(200).json(results.rows[0]['flux'])
     } else response.status(404).json()
 
@@ -389,6 +482,8 @@ const putTraitementOt = (request, response) => {
   try {
     pool.query('select v1.put_traitement_ot($1,$2,$3) as flux', [request.params.id,request.header('Authorization'),request.body], (error, results) => {
       if (error) {
+        console.log("Erreur SQL lors de l'ajout du traitement")
+        console.log(error)
         response.status(500).json(null)
       }  else {  
         if (results!=null) {
@@ -520,7 +615,7 @@ const litInstallation = (request, response) => {
       ,installations.contract_bcode
       ,installations.site_bcode
       ,installations.customer_bcode
-      ,contrats.hotline_support
+      ,installations.hotline_support
       ,validites.isperiodevalide(installations.coverage_id,current_timestamp)  as couverture_valide
       ,to_json(periodes.*) as validite
       ,(select to_json(array_agg(liste_contrats.bcode)) from (select c2.bcode from callcenter_donneesclient.contrats c2 where c2.contractid=installations.contractid and c2.racine=contrats.racine order by c2.bcode DESC) as liste_contrats) as contrats
@@ -710,13 +805,14 @@ const patchFluxOt = (request, response) => {
     pool.query('select v1.patch_flux_ot($1,$2,$3) as flux', [request.params.id,request.header('Authorization'),JSON.stringify(request.body)], (error, results) => {
       if (error) { 
         console.log("Erreur lors de la requete " . error)
-        response.status(500)
+        response.status(500).json(null)
       } else {
-        response.status(200)
+        response.status(200).json(null)
       }
     })
   } catch (e){
     console.log("Error lors de la mise à jour de l'OT : " . error)
+    response.status(500).json(null)
   } 
 }
 
@@ -866,6 +962,30 @@ const rechercheOt = (request, response) => {
   } catch (error) {
     console.error(error);
   }
+}
+
+const litIndicateurs  = (request, response) => {
+  //response.status(200).json(null)
+  //return false
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  const id_dossier=parseInt(request.params.dossier)
+  const id=request.params.id
+  console.log("id_dossier : " + id_dossier + ", noeud " + id) 
+  pool.query('select statistiques.get_statistiques_noeud_v9($1,$2,\'2021-03-22\',\'2022-01-01\') as flux', [id_dossier,id], (error, results) => {
+    if (error) {
+      console.log(error)
+    }
+    if (results===undefined) response.status(404)
+    if (results !== null){
+      if (results.rows===undefined) {
+        response.status(404)
+      } else {
+        response.status(200).json(results.rows[0]['flux'])
+      }
+    } else response.status(404)
+  }) 
 }
 
 const litNoeud = (request, response) => {
@@ -1152,6 +1272,35 @@ const listeOtSmart = (request, response) => {
   }
 } 
 
+const listeOtSupport2 = (request, response) => {
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+
+  console.log("Obtention de la liste des ot du support Token : " + request.header('Authorization') + ", CN : " + request.header('cn'))
+  
+
+  const { name, email } = request.body
+  try { 
+    
+    pool.query('select * from v1.liste_ticket_support_fire360_v2 where cn=$1', [request.header('cn')] , (error, results) => {
+      if (error) {
+        //throw error
+        console.log("Erreur SQL " + error)
+      }
+
+      if (results !== null){
+        response.status(200).json(results.rows)
+      } else {
+        response.status(404)
+      }
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+} 
+
+
 const listeOtSupport = (request, response) => {
   response.header("Access-Control-Allow-Origin", "*");
   response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
@@ -1202,6 +1351,33 @@ const listeOtCC = (request, response) => {
 
       if (results !== null){
         response.status(200).json(results.rows)
+      } else {
+        response.status(404)
+      }
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+} 
+
+const listeOtCCBeta = (request, response) => {
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+
+  console.log("Obtention de la liste des ot CC Beta. Token : " + request.header('Authorization') + ", Referer : " + request.headers.referer)
+
+  const { name, email } = request.body
+  try {     
+    pool.query('select * from v1.liste_ticket_dbin_new($1) as flux', [request.header('Authorization')] , (error, results) => {
+	if (error) {
+	    console.log('Erreur SQL')
+	    response.statut(500).json()
+        //throw error
+      }
+
+      if (results !== null){
+        response.status(200).json(results.rows[0].flux)
       } else {
         response.status(404)
       }
@@ -1633,6 +1809,280 @@ async function getOtSerialise(ot){
     else return(false)
 }
 
+const getListeTicketsSupport = (request, response) => {
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+
+  try {
+    pool.query('select spec_cn.stat_liste_tickets() as flux', [] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors de la recherche des ot actifs")
+        //throw error
+      }
+      response.status(200).json(results.rows[0].flux)
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+const getListeTraitementsSupport = (request, response) => {
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select spec_cn.stat_liste_traitements() as flux', [] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors de la recherche des ot actifs")
+        //throw error
+      }
+      response.status(200).json(results.rows[0].flux)
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+const LireHistoriqueRhino = (request, response) => {
+  console.log("Lecture d'un historique rhino")
+  
+  var params=request.body
+  params.id_noeud=request.params.id
+  params.id_dossier=request.params.dossier
+  console.log(params)
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select rhino.get_historique($1) as flux', [params] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors de la recherche des ot actifs")
+        //throw error
+      }
+      response.status(200).json(results.rows[0].flux)
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+const ListeEquipementsNoeud = (request, response) => {
+  console.log("Lecture d'un historique rhino")
+  
+  var params=request.body
+  params.id_noeud=request.params.id
+  params.id_dossier=request.params.dossier
+  console.log(params)
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select rhino.get_equipements_noeud($1) as flux', [params] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors de la recherche des ot actifs")
+        //throw error
+      }
+      response.status(200).json(results.rows[0].flux)
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+const ListeCanauxNoeud = (request, response) => {
+  console.log("Lecture d'un historique rhino")
+  
+  var params=request.body
+  params.id_noeud=request.params.id
+  params.id_dossier=request.params.dossier
+  console.log(params)
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select rhino.get_canaux_noeud($1) as flux', [params] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors de la recherche des ot actifs")
+        //throw error
+      }
+      response.status(200).json(results.rows[0].flux)
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+
+const putCtiCall = (request, response) => {
+  
+  var params=request.body
+  console.log("Lancement d'un appel à la CTI vers " + params.numero + " / " + params.nom)
+  const device=params.device
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select intranet.getparamid(1205,$1) as value', [params.noeud] , (error, results) => {
+      if (error) {
+        response.status(500).json()    
+      }
+      if (results!==undefined){
+        const prefix=results.rows[0]
+        const numero=prefix.value+params.numero.replace(/[^0-9]/g, '')
+        pool.query('select * from cti.account where id=$1', [device] , (error, results) => {
+          if (error) {
+            response.status(500).json()    
+          }
+          if (results!==undefined){
+            const x_app_id=results.rows[0]['x-app-id']
+            const basic_auth=results.rows[0].basic_auth
+            
+            try {
+              v_traitement={}
+              v_traitement.id_action=440
+              v_traitement.id_commande=1679           
+              v_traitement.id_contact=params.id
+              v_traitement.ot=params.ot
+              v_traitement.params={}
+              v_traitement.params.commentaires="Appel de " + params.nom + " ("+numero+")"
+              v_traitement.params.nom=params.nom
+              v_traitement.params.prefixe=prefix
+              v_traitement.params.numero=params.numero.replace(/[^0-9]/g, '')
+              v_traitement.params.id=params.id
+              
+              pool.query('select v1.put_traitement_ot($1,$2,$3) as flux', [params.ot,request.header('Authorization'),v_traitement], (error, results) => {
+                if (error) {
+                  console.log("Erreur SQL lors de l'ajout du traitement")
+                  console.log(error)
+                  response.status(500).json(null)
+                }  else {  
+                  const v_id_traitement=results.rows[0].flux.id_traitement
+                  var obj={}
+                  obj.number=numero
+                  obj.name='ot_' + params.ot + '_' + v_id_traitement
+                  obj.device='any_device'
+                              
+                  try{
+                    const v_data = Object.keys(obj)
+                    .map((key, index) => `${key}=${encodeURIComponent(obj[key])}`)
+                    .join('&');
+                    
+                    axios({
+                      method: 'post',
+                      url: 'https://dbcall.wildixin.com/api/v1/Calls/',
+                      data: v_data,
+                      headers: {
+                        "Authorization": 'Basic ' + basic_auth,
+                        "X-APP-ID": x_app_id,
+                        "Host":"dbcall.wildixin.com",
+                        "Content-Type": "application/x-www-form-urlencoded"
+                        
+                      }
+                    }).then(function (ret_cti) {    
+                      var ret={}
+                        ret.status=ret_cti.status
+                        ret.numero=numero                
+                        ret.message=ret_cti.statusText
+                        ret.traitement=v_id_traitement
+                        if (ret_cti.status==200) {
+                          try {
+                            pool.query('update processus.traitements set id_commande=1678 where ot=$1 and id=$2', [params.ot,v_id_traitement], (error, results) => {
+                              if (error) {
+                                console.log("Erreur lors de la mise à jour du traitement.")
+                              } 
+                            })
+                          } catch(e){
+                            console.log(e)
+                            response.status(500).json()
+                          }
+                        }
+                        response.status(200).json(ret)                                  
+                    });;
+                  } catch(e){
+                    console.log(e)
+                    response.status(500).json()
+                  }
+                }
+              }) 
+            }  catch(e){
+              console.log(e)
+              response.status(500).json()
+            }
+          } else {
+            response.status(500).json()    
+          }
+    
+        }) 
+      } else {
+        response.status(500).json()    
+      }
+
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+
+
+
+}
+
+const patchEquipementRhino = (request, response) => {
+  console.log("Patch d'un équipement Rhino")
+  
+  var params=request.body
+  params.id=request.params.id
+  console.log(params)
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select rhino.patch_equipement($1) as flux', [params] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors du patch de l'équipement")
+        console.log(error)
+      }
+      if (results!==undefined){
+        response.status(200).json(results.rows[0].flux)
+      } else {
+        response.status(500).json()    
+      }
+
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
+const getUtilisateursEquipe = (request, response) => {  
+  response.header("Access-Control-Allow-Origin", "*");
+  response.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  
+  try {
+    pool.query('select auth.liste_utilisateurs_equipe($1) as flux', [request.params.id] , (error, results) => {
+      if (error) {
+        console.log("Erreur lors du patch de l'équipement")
+        console.log(error)
+      }
+      if (results!==undefined){
+        response.status(200).json(results.rows[0].flux)
+      } else {
+        response.status(500).json()    
+      }
+
+    }) 
+  } catch (e) {
+    response.status(500).json()
+    console.log(e);
+  }
+}
+
 module.exports = {
     uploadFileOt,
     listeOtActifs,
@@ -1697,5 +2147,16 @@ module.exports = {
     getDroitsSupervision,
     listeContactsOpOt,
     postlog,
-    getEquipementsIntervenantsNoeud
+    getEquipementsIntervenantsNoeud,
+    getListeTicketsSupport,
+    getListeTraitementsSupport,
+    listeOtCCBeta,
+    litIndicateurs
+    ,LireHistoriqueRhino
+    ,ListeEquipementsNoeud
+    ,patchEquipementRhino
+    ,ListeCanauxNoeud
+    ,putCtiCall
+    ,getUtilisateursEquipe
+    , listeOtSupport2
 } 
