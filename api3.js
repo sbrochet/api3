@@ -2,7 +2,7 @@ const express = require('express')
 const bodyParser = require('body-parser')
 const app = express()
 var cors = require('cors');
-const port = 1338
+const port = 3026
 const db = require('./queries')
 const dispatchMobile3_db = require('./dispatchmobile3_firebasedb.js')
 const dotenv = require('dotenv');
@@ -55,6 +55,8 @@ app.get('/v1/ticket/contact/:id', cors(), db.getContactOt)
 app.get('/v1/equipe/:id/utilisateurs', cors(), db.getUtilisateursEquipe)
 
 app.patch('/v1/utilisateur/:id',cors(), db.patchUtilisateur)
+
+app.patch('/v1/utilisateur/defee/:id',cors(), db.patchUtilisateurDefEE)
 
 app.get('/v1/utilisateur/droitsSupervision',cors(), db.getDroitsSupervision)
 

@@ -9,15 +9,14 @@ console.log("Connexion à " + process.env.DB_USER + "@" + process.env.DB_NAME + 
 
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
 
-console.log(process.env)
  
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASS,
-  port: process.env.DB_PORT,
-  application_name: process.env.DB_APP_NAME
+  user: 'seb',
+  host: 'dc-int.dbcall.info',
+  database: 'extranet',
+  password: '$qf59VV9u!',
+  port: '6432',
+  application_name: 'api3'
 }) 
 
 pool.on('remove', (err, client) => {
@@ -43,6 +42,20 @@ const patchUtilisateur = (request, response) => {
   console.log("Patch de l'utilisateur " + request.params.id)
   console.log(request.body)
   pool.query('update intranet.utilisateurs set token_fb=$1 where identifiant=$2', [request.body.token_fb,request.params.id], (error, results) => {
+    if (error) {
+      console.log(error)
+      response.status(500).json(null)
+    }
+
+    response.status(200).json(null)
+
+  }) 
+}
+
+const patchUtilisateurDefEE = (request, response) => {
+  console.log("Patch de l'utilisateur DEF EE " + request.params.id)
+  console.log(request.body)
+  pool.query('update def_energie.utilisateurs set token_fb=$1 where identifiant=$2', [request.body.token_fb,request.params.id], (error, results) => {
     if (error) {
       console.log(error)
       response.status(500).json(null)
@@ -2159,4 +2172,5 @@ module.exports = {
     ,putCtiCall
     ,getUtilisateursEquipe
     , listeOtSupport2
+    ,patchUtilisateurDefEE
 } 
