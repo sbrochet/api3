@@ -2,7 +2,7 @@ var firebase_admin = require('firebase-admin');
 const db = require('./queries')
 
 // Fetch the service account key JSON file contents
-var serviceAccount = require("/home/sebastienbrochet/cert_firebase_dispatch3.json");
+var serviceAccount = require("./cert_firebase_dispatch3.json");
 
 // Initialize the app with a null auth variable, limiting the server's access
 firebase_admin.initializeApp({
